@@ -30,10 +30,17 @@ def init_db():
     conn.close()
 
 class AddGame(StatesGroup):
-    waiting_for_genre, waiting_for_name, waiting_for_description, waiting_for_photo, waiting_for_file = State(), State(), State(), State(), State()
+    waiting_for_genre = State()
+    waiting_for_name = State()
+    waiting_for_description = State()
+    waiting_for_photo = State()
+    waiting_for_file = State()
 
-class OrderGame(StatesGroup): waiting_for_order_text = State()
-class AdminReply(StatesGroup): waiting_for_text = State()
+class OrderGame(StatesGroup): 
+    waiting_for_order_text = State()
+
+class AdminReply(StatesGroup): 
+    waiting_for_text = State()
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -69,11 +76,53 @@ def get_admin_action_kb(user_id, game_id="0"):
     builder.button(text="💬 Fikr bildirish", callback_data=f"adm_msg_{user_id}")
     builder.adjust(1); return builder.as_markup()
 
+# --- ADMIN: O'YIN QO'SHISH BOSQICHLARI ---
+
+@dp.message(Command("add"), F.from_user.id == ADMIN_ID)
+async def add_start(m: Message, state: FSMContext):
+    await m.answer("Qaysi janrga o'yin qo'shmoqchisiz?", reply_markup=get_genres_kb())
+    await state.set_state(AddGame.waiting_for_genre)
+
+@dp.message(AddGame.waiting_for_genre, F.text.in_(GENRES))
+async def add_g1(m: Message, state: FSMContext):
+    await state.update_data(genre=m.text)
+    await m.answer(f"O'yin nomini yozib yuboring!", reply_markup=types.ReplyKeyboardRemove())
+    await state.set_state(AddGame.waiting_for_name)
+
+@dp.message(AddGame.waiting_for_name)
+async def add_g2(m: Message, state: FSMContext):
+    await state.update_data(name=m.text)
+    await m.answer("O'yin uchun izoh yozib yuboring!")
+    await state.set_state(AddGame.waiting_for_description)
+
+@dp.message(AddGame.waiting_for_description)
+async def add_g3(m: Message, state: FSMContext):
+    await state.update_data(desc=m.text)
+    await m.answer("O'yin rasmini yuboring (Rasm ko'rinishida):")
+    await state.set_state(AddGame.waiting_for_photo)
+
+@dp.message(AddGame.waiting_for_photo, F.photo)
+async def add_g4(m: Message, state: FSMContext):
+    await state.update_data(photo=m.photo[-1].file_id)
+    await m.answer("O'yin faylini yuboring (Hujjat/File ko'rinishida):")
+    await state.set_state(AddGame.waiting_for_file)
+
+@dp.message(AddGame.waiting_for_file, F.document)
+async def add_g5(m: Message, state: FSMContext):
+    d = await state.get_data()
+    conn = sqlite3.connect('games_bot.db')
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO games (genre, name, description, photo_id, file_id) VALUES (?, ?, ?, ?, ?)", 
+                   (d['genre'], d['name'], d['desc'], d['photo'], m.document.file_id))
+    conn.commit()
+    conn.close()
+    await m.answer("✅ O'yin muvaffaqiyatli bazaga qo'shildi va botda paydo bo'ldi!", reply_markup=get_genres_kb())
+    await state.clear()
+
 # --- ADMIN GURUHIDAGI AMALLAR (REPLY VA FAYL YUBORISH) ---
 
 @dp.message(F.chat.id == ADMIN_CHANNEL_ID)
 async def admin_group_manager(message: Message, state: FSMContext):
-    # 1. Fikr bildirish holati
     cur_state = await state.get_state()
     if cur_state == AdminReply.waiting_for_text:
         data = await state.get_data()
@@ -83,19 +132,16 @@ async def admin_group_manager(message: Message, state: FSMContext):
         except: await message.reply("❌ Foydalanuvchi botni bloklagan.")
         await state.clear(); return
 
-    # 2. Fayl yuborish yoki Matnli Reply
     if message.reply_to_message and message.reply_to_message.from_user.id == bot.id:
         text = message.reply_to_message.text or message.reply_to_message.caption or ""
         match = re.search(r"ID: (\d+)", text)
         if match:
             user_id = match.group(1)
-            # Agar fayl tashlansa
             if message.document or message.video or message.audio:
                 try:
                     await bot.copy_message(chat_id=user_id, from_chat_id=message.chat.id, message_id=message.message_id, caption="🎮 Mana siz so'ragan o'yin! Yuklab oling.")
                     await message.reply(f"✅ Fayl foydalanuvchiga (ID: {user_id}) yuborildi!")
                 except: await message.reply("❌ Faylni yuborib bo'lmadi.")
-            # Agar shunchaki matn yozilsa
             elif message.text:
                 try:
                     await bot.send_message(user_id, f"👨‍💻 Admin: {message.text}")
@@ -114,7 +160,7 @@ async def start_cmd(message: Message, state: FSMContext):
 async def show_genre_games(message: Message):
     kb = get_games_by_genre_kb(message.text)
     if kb: await message.answer(f"✅ {message.text} o'yinlari:", reply_markup=kb)
-    else: await message.answer("⚠️ O'yin yo'q.")
+    else: await message.answer("⚠️ Ushbu janrda hali o'yinlar yo'q.")
 
 @dp.message(F.text == "🎁 O'yin zakas berish", F.chat.type == "private")
 async def order_start(message: Message, state: FSMContext):
@@ -144,19 +190,13 @@ async def adm_msg_call(callback: CallbackQuery, state: FSMContext):
     await state.update_data(target_id=user_id); await state.set_state(AdminReply.waiting_for_text)
     await callback.message.reply(f"💬 ID: {user_id} uchun javob yozing:"); await callback.answer()
 
-@dp.callback_query(F.data.startswith("adm_ready_"))
-async def adm_ready_call(callback: CallbackQuery):
-    uid = callback.data.split("_")[2]
-    await bot.send_message(uid, "🎮 Siz zakaz bergan o'yin tayyor! Uni olish uchun to'lov qiling:", reply_markup=get_user_pay_kb(0))
-    await callback.message.edit_text(callback.message.text + "\n\n✅ Javob berildi: O'yin tayyor")
-
 @dp.callback_query(F.data.startswith("adm_conf_"))
 async def adm_conf_call(callback: CallbackQuery):
     uid, gid = callback.data.split("_")[2], callback.data.split("_")[3]
-    if gid == "0": # Zakaz qilingan o'yin bo'lsa
+    if gid == "0":
         await bot.send_message(uid, "✅ To'lovingiz tasdiqlandi! Admin hozir o'yin faylini yuboradi.")
         await callback.message.edit_text(callback.message.text + f"\n\n✅ TO'LOV TASDIQLANDI (ID: {uid})\n⚠️ Endi ushbu xabarga REPLY qilib o'yin faylini yuboring!")
-    else: # Bazadagi o'yin bo'lsa
+    else:
         conn = sqlite3.connect('games_bot.db'); cursor = conn.cursor()
         cursor.execute("SELECT name, description, photo_id, file_id FROM games WHERE id=?", (gid,))
         g = cursor.fetchone(); conn.close()
@@ -166,7 +206,6 @@ async def adm_conf_call(callback: CallbackQuery):
             await callback.message.edit_text(callback.message.text + "\n\n✅ TASDIQLANDI VA YUBORILDI")
     await callback.answer()
 
-# TO'LOV (USER)
 @dp.callback_query(F.data.startswith("upay_cash_"))
 async def u_cash(c: CallbackQuery):
     gid = c.data.split("_")[2]
@@ -185,36 +224,6 @@ async def u_done(c: CallbackQuery):
     gid = c.data.split("_")[2]
     await bot.send_message(ADMIN_CHANNEL_ID, f"💳 Karta to'lov!\n🆔 ID: {c.from_user.id}\n🎮 O'yin ID: {gid}", reply_markup=get_admin_action_kb(c.from_user.id, gid))
     await c.message.answer("⏳ To'lov tekshirilmoqda...")
-
-# --- ADMIN: O'YIN QO'SHISH ---
-@dp.message(Command("add"), F.from_user.id == ADMIN_ID)
-async def add_start(m: Message, state: FSMContext):
-    await m.answer("Qaysi janrga o'yin qo'shmoqchisiz?", reply_markup=get_genres_kb())
-    await state.set_state(AddGame.waiting_for_genre)
-
-@dp.message(AddGame.waiting_for_genre, F.text.in_(GENRES))
-async def add_g1(m: Message, state: FSMContext):
-    await state.update_data(genre=m.text); await m.answer(f"📝 {m.text} uchun o'yin nomini yuboring:", reply_markup=types.ReplyKeyboardRemove())
-    await state.set_state(AddGame.waiting_for_name)
-
-@dp.message(AddGame.waiting_for_name)
-async def add_g2(m: Message, state: FSMContext):
-    await state.update_data(name=m.text); await m.answer("📄 Izoh yozing:"); await state.set_state(AddGame.waiting_for_description)
-
-@dp.message(AddGame.waiting_for_description)
-async def add_g3(m: Message, state: FSMContext):
-    await state.update_data(desc=m.text); await m.answer("📸 Rasm yuboring:"); await state.set_state(AddGame.waiting_for_photo)
-
-@dp.message(AddGame.waiting_for_photo, F.photo)
-async def add_g4(m: Message, state: FSMContext):
-    await state.update_data(photo=m.photo[-1].file_id); await m.answer("📁 Fayl yuboring:"); await state.set_state(AddGame.waiting_for_file)
-
-@dp.message(AddGame.waiting_for_file, F.document)
-async def add_g5(m: Message, state: FSMContext):
-    d = await state.get_data(); conn = sqlite3.connect('games_bot.db'); cursor = conn.cursor()
-    cursor.execute("INSERT INTO games (genre, name, description, photo_id, file_id) VALUES (?, ?, ?, ?, ?)", (d['genre'], d['name'], d['desc'], d['photo'], m.document.file_id))
-    conn.commit(); conn.close()
-    await m.answer("✅ Qo'shildi!", reply_markup=get_genres_kb()); await state.clear()
 
 async def main():
     init_db()
