@@ -13,7 +13,7 @@ from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 # --- SOZLAMALAR ---
 API_TOKEN = '7752496700:AAGeDWZf65Yi5T9XRBy7t9_r1grDtgaZ6DA' 
 ADMIN_ID = 8320643359 
-ADMIN_CHANNEL_ID = -1004343145305 
+ADMIN_CHANNEL_ID = -1004343145305 # Guruh IDsi
 KARTA_RAQAM = "6262 5700 8837 1937" 
 KARTA_EGASI = "SHERBEK NIZOMIDDINOV"
 
@@ -63,21 +63,141 @@ def get_games_by_genre_kb(genre_name):
     builder.add(KeyboardButton(text="⬅️ Orqaga")); builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
 
-def get_user_pay_kb(game_id):
-    builder = InlineKeyboardBuilder()
-    builder.button(text="💵 Naxt orqali", callback_data=f"upay_cash_{game_id}")
-    builder.button(text="💳 Karta orqali", callback_data=f"upay_card_{game_id}")
-    builder.adjust(2); return builder.as_markup()
+# --- FOYDALANUVCHI AMALLARI ---
 
-def get_admin_action_kb(user_id, game_id="0"):
-    builder = InlineKeyboardBuilder()
-    if game_id != "0": builder.button(text="✅ Tasdiqlash", callback_data=f"adm_conf_{user_id}_{game_id}")
-    else: builder.button(text="✅ To'lovni Tasdiqlash (Zakaz)", callback_data=f"adm_conf_{user_id}_0")
-    builder.button(text="💬 Fikr bildirish", callback_data=f"adm_msg_{user_id}")
-    builder.adjust(1); return builder.as_markup()
+@dp.message(Command("start"), F.chat.type == "private")
+@dp.message(F.text == "⬅️ Orqaga", F.chat.type == "private")
+async def start_cmd(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("📁 Janrni tanlang yoki buyurtma bering:", reply_markup=get_genres_kb())
 
-# --- ADMIN: O'YIN QO'SHISH BOSQICHLARI ---
+@dp.message(F.text.in_(GENRES), F.chat.type == "private")
+async def show_genre_games(message: Message):
+    kb = get_games_by_genre_kb(message.text)
+    if kb: await message.answer(f"✅ {message.text} o'yinlari:", reply_markup=kb)
+    else: await message.answer("⚠️ Ushbu janrda hali o'yinlar yo'q.")
 
+# 1. O'YIN TANLANGANDA RASM VA IZOH CHIQARISH
+@dp.message(F.text, F.chat.type == "private", StateFilter(None))
+async def handle_game_selection(message: Message):
+    conn = sqlite3.connect('games_bot.db'); cursor = conn.cursor()
+    cursor.execute("SELECT id, name, description, photo_id FROM games WHERE name=?", (message.text,))
+    game = cursor.fetchone(); conn.close()
+    
+    if game:
+        game_id, name, desc, photo_id = game
+        kb = InlineKeyboardBuilder()
+        kb.button(text="📥 Faylni yuklab olish", callback_data=f"get_file_{game_id}")
+        
+        await message.answer_photo(
+            photo=photo_id,
+            caption=f"🎮 **{name}**\n\n📝 {desc}",
+            reply_markup=kb.as_markup(),
+            parse_mode="Markdown"
+        )
+
+# 2. YUKLAB OLISH BOSILGANDA TO'LOV TURLARI
+@dp.callback_query(F.data.startswith("get_file_"))
+async def show_payment_methods(callback: CallbackQuery):
+    game_id = callback.data.split("_")[2]
+    
+    kb = InlineKeyboardBuilder()
+    kb.button(text="💵 Naxt orqali", callback_data=f"pay_cash_{game_id}")
+    kb.button(text="💳 Karta orqali", callback_data=f"pay_card_{game_id}")
+    kb.adjust(2)
+    
+    await callback.message.answer(
+        "Faylni yuklab olish uchun to'lov qilishingiz kerak. To'lov turini tanlang:",
+        reply_markup=kb.as_markup()
+    )
+    await callback.answer()
+
+# 3. NAQD TO'LOV TANLANGANDA
+@dp.callback_query(F.data.startswith("pay_cash_"))
+async def process_pay_cash(callback: CallbackQuery):
+    game_id = callback.data.split("_")[2]
+    user = callback.from_user
+    
+    # Guruhga xabar yuborish
+    admin_text = (f"💵 **Naxt to'lov tanlandi!**\n\n"
+                  f"👤 Foydalanuvchi: @{user.username or 'Yashirin'}\n"
+                  f"🆔 ID: {user.id}\n"
+                  f"🎮 O'yin ID: {game_id}\n\n"
+                  f"Fikringizni qoldiring (Reply qilib javob yozing).")
+    
+    await bot.send_message(ADMIN_CHANNEL_ID, admin_text)
+    await callback.message.answer("Adminga so'rov yuborildi. Admin javobini kuting...")
+    await callback.answer()
+
+# 4. KARTA ORQALI TO'LOV TANLANGANDA
+@dp.callback_query(F.data.startswith("pay_card_"))
+async def process_pay_card(callback: CallbackQuery):
+    game_id = callback.data.split("_")[2]
+    
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ To'lov qilish", callback_data=f"card_paid_{game_id}")
+    
+    text = (f"💳 **Karta orqali to'lov**\n\n"
+            f"Raqam: `{KARTA_RAQAM}`\n"
+            f"Ega: {KARTA_EGASI}\n\n"
+            f"To'lovni amalga oshirgach 'To'lov qilish' tugmasini bosing.")
+    
+    await callback.message.answer(text, reply_markup=kb.as_markup(), parse_mode="Markdown")
+    await callback.answer()
+
+# 5. KARTA TO'LOVI TASDIQLASH SO'ROVI
+@dp.callback_query(F.data.startswith("card_paid_"))
+async def process_card_paid(callback: CallbackQuery):
+    game_id = callback.data.split("_")[2]
+    user = callback.from_user
+    
+    await callback.message.answer("To'lovingiz tasdiqlanmoqda...")
+    
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ To'lovni tasdiqlash", callback_data=f"admin_confirm_{user.id}_{game_id}")
+    
+    admin_text = (f"💳 **Karta orqali to'lov so'rovi!**\n\n"
+                  f"👤 Foydalanuvchi: @{user.username or 'Yashirin'}\n"
+                  f"🆔 ID: {user.id}\n"
+                  f"Kartangizni tekshirib ko'ring, pul tushgan bo'lsa tasdiqlash tugmasini bosing.")
+    
+    await bot.send_message(ADMIN_CHANNEL_ID, admin_text, reply_markup=kb.as_markup())
+    await callback.answer()
+
+# 6. ADMIN TASDIQLAGANDA FAYLNI YUBORISH
+@dp.callback_query(F.data.startswith("admin_confirm_"))
+async def final_confirm(callback: CallbackQuery):
+    _, _, user_id, game_id = callback.data.split("_")
+    
+    conn = sqlite3.connect('games_bot.db'); cursor = conn.cursor()
+    cursor.execute("SELECT file_id, name FROM games WHERE id=?", (game_id,))
+    game = cursor.fetchone(); conn.close()
+    
+    if game:
+        try:
+            await bot.send_document(user_id, document=game[0], caption=f"✅ To'lovingiz tasdiqlandi! \n🎮 O'yin: {game[1]}")
+            await callback.message.edit_text(callback.message.text + f"\n\n✅ Tasdiqlandi, foydalanuvchiga fayl yuborildi!")
+        except Exception as e:
+            await callback.message.answer(f"Xatolik: {e}")
+    await callback.answer()
+
+# --- ADMIN: REPLY VA O'YIN QO'SHISH ---
+
+@dp.message(F.chat.id == ADMIN_CHANNEL_ID, F.reply_to_message)
+async def admin_reply_handler(message: Message):
+    # Reply qilingan xabardan foydalanuvchi ID sini qidirish
+    original_text = message.reply_to_message.text or message.reply_to_message.caption
+    if original_text:
+        match = re.search(r"🆔 ID: (\d+)", original_text)
+        if match:
+            user_id = match.group(1)
+            try:
+                await bot.send_message(user_id, f"👨‍💻 Admin javobi: {message.text}")
+                await message.reply("✅ Foydalanuvchiga yetkazildi.")
+            except:
+                await message.reply("❌ Foydalanuvchiga yuborib bo'lmadi.")
+
+# --- O'YIN QO'SHISH (ESKI KODINGIZDAN) ---
 @dp.message(Command("add"), F.from_user.id == ADMIN_ID)
 async def add_start(m: Message, state: FSMContext):
     await m.answer("Qaysi janrga o'yin qo'shmoqchisiz?", reply_markup=get_genres_kb())
@@ -98,70 +218,26 @@ async def add_g2(m: Message, state: FSMContext):
 @dp.message(AddGame.waiting_for_description)
 async def add_g3(m: Message, state: FSMContext):
     await state.update_data(desc=m.text)
-    await m.answer("O'yin rasmini yuboring (Rasm ko'rinishida):")
+    await m.answer("O'yin rasmini yuboring:")
     await state.set_state(AddGame.waiting_for_photo)
 
 @dp.message(AddGame.waiting_for_photo, F.photo)
 async def add_g4(m: Message, state: FSMContext):
     await state.update_data(photo=m.photo[-1].file_id)
-    await m.answer("O'yin faylini yuboring (Hujjat/File ko'rinishida):")
+    await m.answer("O'yin faylini yuboring (Document):")
     await state.set_state(AddGame.waiting_for_file)
 
 @dp.message(AddGame.waiting_for_file, F.document)
 async def add_g5(m: Message, state: FSMContext):
     d = await state.get_data()
-    conn = sqlite3.connect('games_bot.db')
-    cursor = conn.cursor()
+    conn = sqlite3.connect('games_bot.db'); cursor = conn.cursor()
     cursor.execute("INSERT INTO games (genre, name, description, photo_id, file_id) VALUES (?, ?, ?, ?, ?)", 
                    (d['genre'], d['name'], d['desc'], d['photo'], m.document.file_id))
-    conn.commit()
-    conn.close()
-    await m.answer("✅ O'yin muvaffaqiyatli bazaga qo'shildi va botda paydo bo'ldi!", reply_markup=get_genres_kb())
+    conn.commit(); conn.close()
+    await m.answer("✅ O'yin qo'shildi!", reply_markup=get_genres_kb())
     await state.clear()
 
-# --- ADMIN GURUHIDAGI AMALLAR (REPLY VA FAYL YUBORISH) ---
-
-@dp.message(F.chat.id == ADMIN_CHANNEL_ID)
-async def admin_group_manager(message: Message, state: FSMContext):
-    cur_state = await state.get_state()
-    if cur_state == AdminReply.waiting_for_text:
-        data = await state.get_data()
-        try:
-            await bot.send_message(data['target_id'], f"👨‍💻 Admin: {message.text}")
-            await message.reply("✅ Xabar yuborildi.")
-        except: await message.reply("❌ Foydalanuvchi botni bloklagan.")
-        await state.clear(); return
-
-    if message.reply_to_message and message.reply_to_message.from_user.id == bot.id:
-        text = message.reply_to_message.text or message.reply_to_message.caption or ""
-        match = re.search(r"ID: (\d+)", text)
-        if match:
-            user_id = match.group(1)
-            if message.document or message.video or message.audio:
-                try:
-                    await bot.copy_message(chat_id=user_id, from_chat_id=message.chat.id, message_id=message.message_id, caption="🎮 Mana siz so'ragan o'yin! Yuklab oling.")
-                    await message.reply(f"✅ Fayl foydalanuvchiga (ID: {user_id}) yuborildi!")
-                except: await message.reply("❌ Faylni yuborib bo'lmadi.")
-            elif message.text:
-                try:
-                    await bot.send_message(user_id, f"👨‍💻 Admin: {message.text}")
-                    await message.reply("✅ Xabar yuborildi.")
-                except: await message.reply("❌ Yuborib bo'lmadi.")
-
-# --- FOYDALANUVCHI HANDLERLARI ---
-
-@dp.message(Command("start"), F.chat.type == "private")
-@dp.message(F.text == "⬅️ Orqaga", F.chat.type == "private")
-async def start_cmd(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("📁 Janrni tanlang yoki buyurtma bering:", reply_markup=get_genres_kb())
-
-@dp.message(F.text.in_(GENRES), F.chat.type == "private")
-async def show_genre_games(message: Message):
-    kb = get_games_by_genre_kb(message.text)
-    if kb: await message.answer(f"✅ {message.text} o'yinlari:", reply_markup=kb)
-    else: await message.answer("⚠️ Ushbu janrda hali o'yinlar yo'q.")
-
+# ZAKAZ BERISH
 @dp.message(F.text == "🎁 O'yin zakas berish", F.chat.type == "private")
 async def order_start(message: Message, state: FSMContext):
     await message.answer("📝 O'yin nomini yozing:")
@@ -169,61 +245,10 @@ async def order_start(message: Message, state: FSMContext):
 
 @dp.message(OrderGame.waiting_for_order_text)
 async def order_received(message: Message, state: FSMContext):
-    text = f"🎁 Yangi Buyurtma!\n\n👤 @{message.from_user.username}\n🆔 ID: {message.from_user.id}\n📩 Fikr: {message.text}"
-    await bot.send_message(ADMIN_CHANNEL_ID, text, reply_markup=get_admin_action_kb(message.from_user.id))
-    await message.answer("✅ Adminga yuborildi! O'yin tayyor bo'lishini kuting.")
+    text = f"🎁 **Yangi Buyurtma!**\n\n👤 @{message.from_user.username}\n🆔 ID: {message.from_user.id}\n📩 Fikr: {message.text}"
+    await bot.send_message(ADMIN_CHANNEL_ID, text)
+    await message.answer("✅ Adminga yuborildi!")
     await state.clear()
-
-@dp.message(F.text, F.chat.type == "private", StateFilter(None))
-async def handle_game_selection(message: Message):
-    conn = sqlite3.connect('games_bot.db'); cursor = conn.cursor()
-    cursor.execute("SELECT id FROM games WHERE name=?", (message.text,))
-    game = cursor.fetchone(); conn.close()
-    if game:
-        await message.answer(f"🎮 {message.text} tanlandi. Yuklab olish uchun 5,000 so'm to'lov qiling 😁", reply_markup=get_user_pay_kb(game[0]))
-
-# --- CALLBACKLAR ---
-
-@dp.callback_query(F.data.startswith("adm_msg_"))
-async def adm_msg_call(callback: CallbackQuery, state: FSMContext):
-    user_id = callback.data.split("_")[2]
-    await state.update_data(target_id=user_id); await state.set_state(AdminReply.waiting_for_text)
-    await callback.message.reply(f"💬 ID: {user_id} uchun javob yozing:"); await callback.answer()
-
-@dp.callback_query(F.data.startswith("adm_conf_"))
-async def adm_conf_call(callback: CallbackQuery):
-    uid, gid = callback.data.split("_")[2], callback.data.split("_")[3]
-    if gid == "0":
-        await bot.send_message(uid, "✅ To'lovingiz tasdiqlandi! Admin hozir o'yin faylini yuboradi.")
-        await callback.message.edit_text(callback.message.text + f"\n\n✅ TO'LOV TASDIQLANDI (ID: {uid})\n⚠️ Endi ushbu xabarga REPLY qilib o'yin faylini yuboring!")
-    else:
-        conn = sqlite3.connect('games_bot.db'); cursor = conn.cursor()
-        cursor.execute("SELECT name, description, photo_id, file_id FROM games WHERE id=?", (gid,))
-        g = cursor.fetchone(); conn.close()
-        if g:
-            await bot.send_photo(uid, photo=g[2], caption=f"✅ To'lov tasdiqlandi!\n\n{g[0]}\n{g[1]}")
-            await bot.send_document(uid, document=g[3])
-            await callback.message.edit_text(callback.message.text + "\n\n✅ TASDIQLANDI VA YUBORILDI")
-    await callback.answer()
-
-@dp.callback_query(F.data.startswith("upay_cash_"))
-async def u_cash(c: CallbackQuery):
-    gid = c.data.split("_")[2]
-    await bot.send_message(ADMIN_CHANNEL_ID, f"💵 Naqd To'lov!\n🆔 ID: {c.from_user.id}\n🎮 O'yin ID: {gid}", reply_markup=get_admin_action_kb(c.from_user.id, gid))
-    await c.message.answer("👨‍💻 Admin javobini kuting.")
-
-@dp.callback_query(F.data.startswith("upay_card_"))
-async def u_card(c: CallbackQuery):
-    gid = c.data.split("_")[2]
-    kb = InlineKeyboardBuilder()
-    kb.button(text="✅ To'lov qildim", callback_data=f"upay_done_{gid}")
-    await c.message.answer(f"💳 Karta: `{KARTA_RAQAM}`\n👤 Ega: {KARTA_EGASI}", reply_markup=kb.as_markup(), parse_mode="Markdown")
-
-@dp.callback_query(F.data.startswith("upay_done_"))
-async def u_done(c: CallbackQuery):
-    gid = c.data.split("_")[2]
-    await bot.send_message(ADMIN_CHANNEL_ID, f"💳 Karta to'lov!\n🆔 ID: {c.from_user.id}\n🎮 O'yin ID: {gid}", reply_markup=get_admin_action_kb(c.from_user.id, gid))
-    await c.message.answer("⏳ To'lov tekshirilmoqda...")
 
 async def main():
     init_db()
