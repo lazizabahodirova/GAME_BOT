@@ -309,7 +309,6 @@ async def process_card_paid(callback: CallbackQuery):
     game_id = callback.data.split("_")[2]
     user = callback.from_user
 
-    # O'yin ma'lumotlari
     conn = sqlite3.connect('games_bot.db')
     cursor = conn.cursor()
     cursor.execute("SELECT name, genre FROM games WHERE id=?", (game_id,))
@@ -335,30 +334,19 @@ async def process_card_paid(callback: CallbackQuery):
         f"Tekshirib tasdiqlang."
     )
 
-    await bot.send_message(
-        ADMIN_CHANNEL_ID,
-        admin_text,
-        reply_markup=kb.as_markup(),
-        parse_mode="Markdown"
-    )
+    success = await send_to_admin(admin_text, reply_markup=kb.as_markup())
 
-    await callback.message.answer(
-        "✅ To'lovingiz tekshirilmoqda...\n"
-        "Admin tasdiqlagandan so'ng o'yin fayli yuboriladi."
-    )
+    if success:
+        await callback.message.answer(
+            "✅ To'lovingiz tekshirilmoqda...\n"
+            "Admin tasdiqlagandan so'ng o'yin fayli yuboriladi."
+        )
+    else:
+        await callback.message.answer("❌ So‘rov adminga yuborilmadi.")
+    
     await callback.answer()
 
 # --- FIKR QOLDIRISH ---
-@dp.callback_query(F.data.startswith("feedback_"))
-async def start_feedback(callback: CallbackQuery, state: FSMContext):
-    game_id = callback.data.split("_")[1]
-    await state.update_data(feedback_game_id=game_id)
-    await callback.message.answer(
-        "✍️ Biron bir muammo bo'lsa yoki to'lov qilganingizni yozib qoldiring..."
-    )
-    await state.set_state(Feedback.waiting_for_feedback)
-    await callback.answer()
-
 @dp.message(Feedback.waiting_for_feedback)
 async def process_feedback(message: Message, state: FSMContext):
     data = await state.get_data()
@@ -372,8 +360,13 @@ async def process_feedback(message: Message, state: FSMContext):
         f"📩 Xabar:\n{message.text}"
     )
 
-    await bot.send_message(ADMIN_CHANNEL_ID, text, parse_mode="Markdown")
-    await message.answer("✅ Fikringiz adminga yuborildi!")
+    success = await send_to_admin(text)
+
+    if success:
+        await message.answer("✅ Fikringiz adminga yuborildi!")
+    else:
+        await message.answer("❌ Fikringiz yuborilmadi. Iltimos, keyinroq urinib ko‘ring.")
+    
     await state.clear()
 
 # --- ADMIN TASDIQLASH ---
