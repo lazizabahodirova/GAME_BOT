@@ -182,16 +182,24 @@ async def more_feedback_yes(message: Message, state: FSMContext):
 @dp.message(OrderGame.waiting_for_more_choice, F.text == "Yo'q", F.chat.type == "private")
 async def more_feedback_no(message: Message, state: FSMContext):
     username = message.from_user.username or "Username yo'q"
+    
     msg = (
-        f"📁 Foydalanuvchi o'yin faylini kutmoqda!\n\n"
-        f"👤 @{username}\n"
-        f"🆔 ID: `{message.from_user.id}`\n\n"
-        f"➡️ O'yin faylini (document) shu xabarga reply qilib yuboring."
+        f"📁 <b>Foydalanuvchi o'yin faylini kutmoqda!</b>\n\n"
+        f"👤 @{escape(username)}\n"
+        f"🆔 ID: <code>{message.from_user.id}</code>\n\n"
+        f"➡️ O'yin faylini (document) shu xabarga <b>reply</b> qilib yuboring."
     )
-    await bot.send_message(ADMIN_CHANNEL_ID, msg, parse_mode="Markdown")
-    await message.answer("✅ Adminga xabar berildi. O'yin fayli tez orada yuboriladi.", reply_markup=get_genres_kb())
+    
+    await bot.send_message(ADMIN_CHANNEL_ID, msg, parse_mode="HTML")
+    
     await state.clear()
-
+    await message.answer(
+        "✅ Adminga xabar berildi.\n"
+        "O'yin fayli tez orada yuboriladi.\n\n"
+        "📁 Bosh menyuga qaytdingiz:",
+        reply_markup=get_genres_kb()
+    )
+    
 @dp.message(OrderGame.waiting_for_more_feedback, F.chat.type == "private")
 async def more_feedback_done(message: Message, state: FSMContext):
     username = message.from_user.username or "Username yo'q"
