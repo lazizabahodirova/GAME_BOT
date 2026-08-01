@@ -1,3 +1,4 @@
+import json
 import asyncio
 import sqlite3
 import logging
@@ -23,7 +24,13 @@ logging.basicConfig(level=logging.INFO)
 
 GENRES = [
     "🚗 Car Games", "🔫 Action Games", "🧟 Horror Games", "⚽ Sports Games",
-    "🌍 Open World", "📱 Ilovalar", "🌐 Online Games", "🕹PPSSPP O'yinlar"
+    "🌍 Open World", "📱 Apps", "🌐 Online Games", "🕹PPSSPP Games"
+]
+
+PC_GAME_GENRES = [
+    "🏎 Car Games", "⚽ Sport Games", "🥊 Fight Games", "🧟 Zombie Games",
+    "👻 Horror Games", "🕹 Arcade", "🌎 Open World",
+    "💥 Action Games", "🧠 Strategy", "✈️ Simulator"
 ]
 
 # --- BAZA ---
@@ -49,6 +56,10 @@ class AddItem(StatesGroup):
     waiting_for_description = State()
     waiting_for_photo = State()
     waiting_for_file_or_link = State()
+
+class DeleteItem(StatesGroup):
+    waiting_for_category = State()
+    waiting_for_item = State()
 
 class OrderItem(StatesGroup):
     waiting_for_name = State()
@@ -96,6 +107,14 @@ def pc_games_kb():
     builder.add(KeyboardButton(text="🎁 Ilova/O'yin buyurtirish"))
     builder.add(KeyboardButton(text="⬅️ Orqaga"))
     builder.adjust(1)
+    return builder.as_markup(resize_keyboard=True)
+def pc_genres_kb():
+    builder = ReplyKeyboardBuilder()
+    for g in PC_GAME_GENRES:
+        builder.add(KeyboardButton(text=g))
+    builder.add(KeyboardButton(text="🎁 Ilova/O'yin buyurtirish"))
+    builder.add(KeyboardButton(text="⬅️ Orqaga"))
+    builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
 
 def get_items_kb(platform: str, category: str):
@@ -158,9 +177,11 @@ async def pc_apps(message: Message, state: FSMContext):
 
 @dp.message(F.text == "🎮 O'yinlar", F.chat.type == "private")
 async def pc_games(message: Message, state: FSMContext):
-    await state.update_data(platform="pc", category="games")
-    kb = get_items_kb("pc", "games")
-    await message.answer("🎮 PC O'yinlari:", reply_markup=kb)
+    await state.update_data(platform="pc", category="games")  # vaqtinchalik
+    await message.answer(
+        "🎮 PC O'yinlari — janrni tanlang:",
+        reply_markup=pc_genres_kb()
+    )
 
 # ========== /ADD (ADMIN) ==========
 @dp.message(Command("add"), F.from_user.id == ADMIN_ID)
@@ -172,23 +193,42 @@ async def add_start(message: Message, state: FSMContext):
     if platform == "android":
         await message.answer("Qaysi janrga o'yin qo'shmoqchisiz?", reply_markup=android_menu_kb())
         await state.set_state(AddItem.waiting_for_genre)
+
     elif platform == "pc" and category == "apps":
         await message.answer("Qo'shmoqchi bo'lgan ilovangizni nomini yozing!")
         await state.set_state(AddItem.waiting_for_name)
         await state.update_data(add_type="app")
-    elif platform == "pc" and category == "games":
-        await message.answer("Qo'shmoqchi bo'lgan o'yin nomini yozib qoldiring!")
-        await state.set_state(AddItem.waiting_for_name)
-        await state.update_data(add_type="game")
+
+    elif platform == "pc" and (category == "games" or category in PC_GAME_GENRES):
+        # Agar hali janr tanlanmagan bo'lsa — janr so'raymiz
+        if category == "games" or category not in PC_GAME_GENRES:
+            await message.answer(
+                "Qaysi janrga PC o'yinini qo'shmoqchisiz?",
+                reply_markup=pc_genres_kb()
+            )
+            await state.set_state(AddItem.waiting_for_genre)
+        else:
+            # Allaqachon janr tanlangan
+            await message.answer("O'yin nomini yozib yuboring!", reply_markup=ReplyKeyboardRemove())
+            await state.set_state(AddItem.waiting_for_name)
+
     else:
-        await message.answer("Avval Android yoki PC bo'limiga kiring, keyin /add yozing.")
+        await message.answer("Avval Android yoki PC → O'yinlar bo'limiga kiring, keyin /add yozing.")
 
 @dp.message(AddItem.waiting_for_genre)
 async def add_genre(message: Message, state: FSMContext):
-    if message.text in GENRES:
-        await state.update_data(category=message.text, platform="android")
+    text = message.text
+
+    if text in GENRES:
+        await state.update_data(category=text, platform="android")
         await message.answer("O'yin nomini yozib yuboring!", reply_markup=ReplyKeyboardRemove())
         await state.set_state(AddItem.waiting_for_name)
+
+    elif text in PC_GAME_GENRES:
+        await state.update_data(category=text, platform="pc")
+        await message.answer("O'yin nomini yozib yuboring!", reply_markup=ReplyKeyboardRemove())
+        await state.set_state(AddItem.waiting_for_name)
+
     else:
         await message.answer("Menyudagi janrlardan birini tanlang!")
 
@@ -206,30 +246,191 @@ async def add_desc(message: Message, state: FSMContext):
 
 @dp.message(AddItem.waiting_for_photo, F.photo)
 async def add_photo(message: Message, state: FSMContext):
-    await state.update_data(photo=message.photo[-1].file_id)
+    await state.update_data(photo=message.photo[-1].file_id, files=[])  # bo'sh ro'yxat
     data = await state.get_data()
+    
     if data.get("platform") == "pc" and data.get("category") == "games":
-        await message.answer("O'yin linkini yoki faylini yuboring:")
+        await message.answer(
+            "O'yin linkini yuboring yoki fayllarni yuboring.\n"
+            "Bir nechta fayl yuborishingiz mumkin.\n"
+            "Tayyor bo'lgach <b>✅ Tayyor</b> deb yozing.",
+            parse_mode="HTML"
+        )
     else:
-        await message.answer("Faylni yuboring:")
+        await message.answer(
+            "Fayllarni yuboring (APK, OBB va boshqalar).\n"
+            "Nechta bo'lsa ham yuborishingiz mumkin.\n"
+            "Barcha fayllarni yuborib bo'lgach <b>✅ Tayyor</b> deb yozing.",
+            parse_mode="HTML"
+        )
     await state.set_state(AddItem.waiting_for_file_or_link)
 
-@dp.message(AddItem.waiting_for_file_or_link, F.document | F.text)
-async def add_file(message: Message, state: FSMContext):
+@dp.message(AddItem.waiting_for_file_or_link, F.document)
+async def add_file_collect(message: Message, state: FSMContext):
     data = await state.get_data()
-    file_id = message.document.file_id if message.document else None
-    link = message.text if message.text and not message.document else None
+    files = data.get("files", [])
+    files.append(message.document.file_id)
+    await state.update_data(files=files)
+    
+    await message.answer(
+        f"✅ Fayl qabul qilindi! (jami: {len(files)} ta)\n"
+        f"Yana yuborishingiz mumkin yoki <b>✅ Tayyor</b> deb yozing.",
+        parse_mode="HTML"
+    )
+
+
+@dp.message(AddItem.waiting_for_file_or_link, F.text)
+async def add_file_finish(message: Message, state: FSMContext):
+    text = message.text.strip().lower()
+    
+    # Agar "tayyor" deb yozmasa va link bo'lsa (PC o'yinlari uchun)
+    data = await state.get_data()
+    files = data.get("files", [])
+    
+    if text in ["✅ tayyor", "tayyor", "✅"]:
+        if not files and data.get("platform") == "android":
+            await message.answer("Kamida bitta fayl yuboring!")
+            return
+        
+        # Saqlash
+        file_ids_json = json.dumps(files) if files else None
+        link = None
+        
+        conn = sqlite3.connect('games_bot.db')
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO items (platform, category, name, description, photo_id, file_id, link) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (data['platform'], data['category'], data['name'], data['desc'], data['photo'], file_ids_json, link)
+        )
+        conn.commit()
+        conn.close()
+        
+        await message.answer(
+            f"✅ <b>{escape(data['name'])}</b> muvaffaqiyatli qo'shildi!\n"
+            f"📦 Fayllar soni: {len(files)} ta",
+            reply_markup=main_menu_kb(),
+            parse_mode="HTML"
+        )
+        await state.clear()
+        return
+    
+    # Agar matn kelgan bo'lsa — bu link deb hisoblaymiz (PC o'yinlari uchun)
+    if data.get("platform") == "pc" and data.get("category") == "games":
+        link = message.text
+        file_ids_json = json.dumps(files) if files else None
+        
+        conn = sqlite3.connect('games_bot.db')
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO items (platform, category, name, description, photo_id, file_id, link) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (data['platform'], data['category'], data['name'], data['desc'], data['photo'], file_ids_json, link)
+        )
+        conn.commit()
+        conn.close()
+        
+        await message.answer(
+            f"✅ <b>{escape(data['name'])}</b> muvaffaqiyatli qo'shildi!",
+            reply_markup=main_menu_kb(),
+            parse_mode="HTML"
+        )
+        await state.clear()
+    else:
+        await message.answer("Fayl yuboring yoki <b>✅ Tayyor</b> deb yozing.", parse_mode="HTML")
+
+# ========== /del (ADMIN) — o'chirish ==========
+@dp.message(Command("del"), F.from_user.id == ADMIN_ID)
+async def del_start(message: Message, state: FSMContext):
+    builder = ReplyKeyboardBuilder()
+    for g in GENRES:
+        builder.add(KeyboardButton(text=g))
+    builder.add(KeyboardButton(text="📲 PC Ilovalar"), KeyboardButton(text="🎮 PC O'yinlar"))
+    builder.add(KeyboardButton(text="⬅️ Orqaga"))
+    builder.adjust(2)
+    await message.answer(
+        "Qaysi bo'limdan o'yin/ilovani o'chirmoqchisiz?\nJanr yoki bo'limni tanlang:",
+        reply_markup=builder.as_markup(resize_keyboard=True)
+    )
+    await state.set_state(DeleteItem.waiting_for_category)
+
+
+@dp.message(DeleteItem.waiting_for_category, F.chat.type == "private")
+async def del_choose_category(message: Message, state: FSMContext):
+    text = message.text
+
+    if text == "⬅️ Orqaga":
+        await state.clear()
+        await message.answer("Bekor qilindi.", reply_markup=main_menu_kb())
+        return
+
+    if text in GENRES:
+        platform = "android"
+        category = text
+    elif text == "📲 PC Ilovalar":
+        platform = "pc"
+        category = "apps"
+    elif text == "🎮 PC O'yinlar":
+        platform = "pc"
+        category = "games"
+    else:
+        await message.answer("Iltimos, menyudagi bo'limlardan birini tanlang!")
+        return
+
+    await state.update_data(platform=platform, category=category)
+
+    kb = get_items_kb(platform, category)
+    # Agar hech narsa bo'lmasa
+    conn = sqlite3.connect('games_bot.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM items WHERE platform=? AND category=?", (platform, category))
+    count = cursor.fetchone()[0]
+    conn.close()
+
+    if count == 0:
+        await message.answer("Bu bo'limda hozircha hech narsa yo'q.", reply_markup=main_menu_kb())
+        await state.clear()
+        return
+
+    await message.answer(
+        f"O'chirmoqchi bo'lgan o'yin/ilovani tanlang:\n({count} ta mavjud)",
+        reply_markup=kb
+    )
+    await state.set_state(DeleteItem.waiting_for_item)
+
+
+@dp.message(DeleteItem.waiting_for_item, F.chat.type == "private")
+async def del_item(message: Message, state: FSMContext):
+    if message.text == "⬅️ Orqaga":
+        await state.clear()
+        await message.answer("Bekor qilindi.", reply_markup=main_menu_kb())
+        return
+
+    data = await state.get_data()
+    platform = data.get("platform")
+    category = data.get("category")
+    name = message.text
 
     conn = sqlite3.connect('games_bot.db')
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO items (platform, category, name, description, photo_id, file_id, link) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (data['platform'], data['category'], data['name'], data['desc'], data['photo'], file_id, link)
+        "DELETE FROM items WHERE name=? AND platform=? AND category=?",
+        (name, platform, category)
     )
+    deleted = cursor.rowcount
     conn.commit()
     conn.close()
 
-    await message.answer(f"✅ '{data['name']}' muvaffaqiyatli qo'shildi!", reply_markup=main_menu_kb())
+    if deleted > 0:
+        await message.answer(
+            f"✅ <b>{escape(name)}</b> muvaffaqiyatli o'chirildi!",
+            reply_markup=main_menu_kb(),
+            parse_mode="HTML"
+        )
+    else:
+        await message.answer(
+            "❌ Bunday o'yin/ilova topilmadi. Qaytadan urinib ko'ring.",
+            reply_markup=main_menu_kb()
+        )
+
     await state.clear()
 
 # ========== O'YIN / ILOVA KO'RSATISH ==========
@@ -298,6 +499,12 @@ async def show_android_games(message: Message, state: FSMContext):
     await state.update_data(platform="android", category=message.text)
     kb = get_items_kb("android", message.text)
     await message.answer(f"✅ {message.text} janridagi o'yinlar:", reply_markup=kb)
+
+@dp.message(F.text.in_(PC_GAME_GENRES), F.chat.type == "private")
+async def show_pc_games_by_genre(message: Message, state: FSMContext):
+    await state.update_data(platform="pc", category=message.text)
+    kb = get_items_kb("pc", message.text)
+    await message.answer(f"✅ {message.text} janridagi PC o'yinlari:", reply_markup=kb)
 
 # MUHIM: buyurtma tugmasini ushlamaslik uchun ~F.text.contains qo'shildi
 @dp.message(
@@ -499,37 +706,81 @@ async def feedback_done(message: Message, state: FSMContext):
 @dp.callback_query(F.data.startswith("admin_confirm_"))
 async def admin_confirm(callback: CallbackQuery):
     parts = callback.data.split("_")
-    confirm_type = parts[2]  # cash yoki card
+    # admin_confirm_cash_USERID_ITEMID  yoki  admin_confirm_card_USERID_ITEMID
+    if len(parts) < 5:
+        await callback.answer("Noto'g'ri ma'lumot!", show_alert=True)
+        return
+
+    confirm_type = parts[2]          # cash yoki card
     user_id = int(parts[3])
     target_id = parts[4]
 
-    # Agar buyurtma bo'lsa faylni admin o'zi yuboradi
-    if target_id.isdigit() and int(target_id) < 100000:  # taxminiy item id
+    # --- Oddiy o'yin/ilova (item_id kichik son) ---
+    if target_id.isdigit() and int(target_id) < 1000000:
         conn = sqlite3.connect('games_bot.db')
         cursor = conn.cursor()
         cursor.execute("SELECT file_id, name, link FROM items WHERE id=?", (target_id,))
         item = cursor.fetchone()
         conn.close()
 
-        if item:
-            file_id, name, link = item
-            try:
-                if file_id:
-                    await bot.send_document(user_id, document=file_id, caption=f"✅ To'lovingiz tasdiqlandi!\n🎮 {name}")
-                elif link:
-                    await bot.send_message(user_id, f"✅ To'lovingiz tasdiqlandi!\n🔗 Link: {link}")
-                await callback.message.edit_text(callback.message.text + "\n\n✅ FOYDALANUVCHIGA YUBORILDI")
-            except:
-                await callback.answer("Foydalanuvchi botni bloklagan!", show_alert=True)
-        else:
-            await callback.answer("Item topilmadi!")
-    else:
-        # Buyurtma uchun
-        await bot.send_message(user_id, "Admin to'lovingizni tasdiqladi. Iltimos fayl kelishini kuting...")
-        await bot.send_message(ADMIN_CHANNEL_ID, f"Iltimos buyurtma qilingan faylni tashlang!\nUser ID: <code>{user_id}</code>", parse_mode="HTML")
-        await callback.message.edit_text(callback.message.text + "\n\n✅ FOYDALANUVCHIGA XABAR YUBORILDI")
+        if not item:
+            await callback.answer("O'yin topilmadi!", show_alert=True)
+            return
 
-    await callback.answer()
+        file_data, name, link = item
+
+        # file_id JSON ro'yxat yoki oddiy string bo'lishi mumkin
+        file_ids = []
+        if file_data:
+            try:
+                parsed = json.loads(file_data)
+                if isinstance(parsed, list):
+                    file_ids = parsed
+                else:
+                    file_ids = [str(parsed)]
+            except (json.JSONDecodeError, TypeError):
+                # Eski format — oddiy bitta file_id
+                file_ids = [file_data]
+
+        try:
+            if file_ids:
+                for i, fid in enumerate(file_ids, 1):
+                    caption = f"✅ To'lovingiz tasdiqlandi!\n🎮 {name}" if i == 1 else f"📦 Qo'shimcha fayl ({i}/{len(file_ids)})"
+                    await bot.send_document(chat_id=user_id, document=fid, caption=caption)
+            elif link:
+                await bot.send_message(user_id, f"✅ To'lovingiz tasdiqlandi!\n🔗 Link: {link}")
+            else:
+                await callback.answer("Fayl yoki link topilmadi!", show_alert=True)
+                return
+
+            await callback.message.edit_text(
+                (callback.message.text or callback.message.caption or "") + "\n\n✅ FOYDALANUVCHIGA YUBORILDI"
+            )
+            await callback.answer("Muvaffaqiyatli yuborildi!")
+        except Exception as e:
+            error_text = str(e).lower()
+            if "blocked" in error_text or "forbidden" in error_text or "chat not found" in error_text:
+                await callback.answer("Foydalanuvchi botni bloklagan yoki start bosmagan!", show_alert=True)
+            else:
+                # Haqiqiy xatoni ko'rsatamiz (debug uchun)
+                await callback.answer(f"Xato: {e}", show_alert=True)
+                print(f"ADMIN_CONFIRM XATO: {e}")  # terminalda ko'rinadi
+
+    else:
+        # Buyurtma holati
+        try:
+            await bot.send_message(user_id, "Admin to'lovingizni tasdiqladi. Iltimos fayl kelishini kuting...")
+            await bot.send_message(
+                ADMIN_CHANNEL_ID,
+                f"Iltimos buyurtma qilingan faylni tashlang!\nUser ID: <code>{user_id}</code>",
+                parse_mode="HTML"
+            )
+            await callback.message.edit_text(
+                (callback.message.text or "") + "\n\n✅ FOYDALANUVCHIGA XABAR YUBORILDI"
+            )
+            await callback.answer()
+        except Exception as e:
+            await callback.answer(f"Xato: {e}", show_alert=True)
 
 # Admin reply (fayl yoki matn)
 @dp.message(F.chat.id == ADMIN_CHANNEL_ID, F.reply_to_message)
