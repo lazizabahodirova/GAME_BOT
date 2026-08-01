@@ -23,7 +23,7 @@ logging.basicConfig(level=logging.INFO)
 
 GENRES = [
     "🚗 Car Games", "🔫 Action Games", "🧟 Horror Games", "⚽ Sports Games",
-    "🌍 Open World", "📱 Ilovalar", "🌐 Online Games", "💎 MOD APK"
+    "🌍 Open World", "📱 Ilovalar", "🌐 Online Games", "🕹PPSSPP O'yinlar"
 ]
 
 # --- BAZA ---
