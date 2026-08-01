@@ -233,55 +233,16 @@ async def add_file(message: Message, state: FSMContext):
     await state.clear()
 
 # ========== O'YIN / ILOVA KO'RSATISH ==========
-@dp.message(F.text.in_(GENRES), F.chat.type == "private")
-async def show_android_games(message: Message, state: FSMContext):
-    await state.update_data(platform="android", category=message.text)
-    kb = get_items_kb("android", message.text)
-    await message.answer(f"✅ {message.text} janridagi o'yinlar:", reply_markup=kb)
-
-@dp.message(F.text, F.chat.type == "private", StateFilter(None))
-async def show_item_detail(message: Message, state: FSMContext):
-    data = await state.get_data()
-    platform = data.get("platform")
-    category = data.get("category")
-    
-    if not platform or not category:
-        return
-
-    conn = sqlite3.connect('games_bot.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, name, description, photo_id, file_id, link FROM items WHERE name=? AND platform=? AND category=?",
-                   (message.text, platform, category))
-    item = cursor.fetchone()
-    conn.close()
-
-    if not item:
-        return
-
-    item_id, name, desc, photo, file_id, link = item
-    short_desc = desc[:900] + "..." if len(desc) > 900 else desc
-
-    kb = InlineKeyboardBuilder()
-    if platform == "android" or (platform == "pc" and category == "apps"):
-        kb.button(text="📥 Yuklab olish", callback_data=f"download_{item_id}")
-    else:
-        kb.button(text="🔗 O'yin linkini olish", callback_data=f"download_{item_id}")
-
-    await message.answer_photo(
-        photo=photo,
-        caption=f"🎮 <b>{escape(name)}</b>\n\n📝 {escape(short_desc)}",
-        reply_markup=kb.as_markup(),
-        parse_mode="HTML"
-    )
-
 # ========== BUYURTMA (ZAKAS) ==========
-@dp.message(F.text == "🎁 Ilova/O'yin buyurtirish", F.chat.type == "private")
+@dp.message(F.text.contains("Ilova/O'yin buyurtirish"), F.chat.type == "private")
 async def order_start(message: Message, state: FSMContext):
+    print("✅ order_start ISHLADI!")
     await message.answer("Buyurtma qilmoqchi bo'lgan o'yin yoki ilova nomini to'liq yozib qoldiring!")
     await state.set_state(OrderItem.waiting_for_name)
 
 @dp.message(OrderItem.waiting_for_name, F.chat.type == "private")
 async def order_name(message: Message, state: FSMContext):
+    print("✅ order_name ISHLADI")
     username = message.from_user.username or "Username yo'q"
     user_id = message.from_user.id
     order_text = message.text
@@ -306,6 +267,7 @@ async def order_name(message: Message, state: FSMContext):
 
 @dp.callback_query(F.data == "confirm_order")
 async def confirm_order(callback: CallbackQuery, state: FSMContext):
+    print("✅ confirm_order ISHLADI")
     data = await state.get_data()
     username = callback.from_user.username or "Username yo'q"
     user_id = callback.from_user.id
@@ -320,47 +282,67 @@ async def confirm_order(callback: CallbackQuery, state: FSMContext):
     kb.button(text="💳 To'lov qilishini so'rash", callback_data=f"ask_payment_{user_id}")
     await bot.send_message(ADMIN_CHANNEL_ID, msg, reply_markup=kb.as_markup(), parse_mode="HTML")
 
-    await callback.message.answer("Iltimos o'yin/ilova faylini olishdan avval pastdagi tugmalar orqali to'lov qiling!",
-                                  reply_markup=InlineKeyboardBuilder()
-                                  .button(text="💵 Naxt orqali", callback_data=f"pay_cash_order_{user_id}")
-                                  .button(text="💳 Karta orqali", callback_data=f"pay_card_order_{user_id}")
-                                  .adjust(1).as_markup())
-    await callback.answer()
-
-# ========== TO'LOV TIZIMI (YUKLAB OLISH UCHUN HAM) ==========
-@dp.callback_query(F.data.startswith("download_"))
-async def start_download(callback: CallbackQuery):
-    item_id = callback.data.split("_")[1]
-    kb = InlineKeyboardBuilder()
-    kb.button(text="💵 Naxt orqali", callback_data=f"pay_cash_{item_id}")
-    kb.button(text="💳 Karta orqali", callback_data=f"pay_card_{item_id}")
-    kb.adjust(1)
-    await callback.message.answer("Iltimos o'yin/ilova faylini olishdan avval to'lov qiling!", reply_markup=kb.as_markup())
-    await callback.answer()
-
-# NAXT
-@dp.callback_query(F.data.startswith("pay_cash_"))
-async def pay_cash(callback: CallbackQuery):
-    parts = callback.data.split("_")
-    is_order = "order" in callback.data
-    target_id = parts[-1]
-
-    username = callback.from_user.username or "Username yo'q"
-    user_id = callback.from_user.id
-
-    msg = (
-        f"💵 <b>Naxt orqali to'lov so'rovi!</b>\n\n"
-        f"👤 @{escape(username)}\n"
-        f"🆔 ID: <code>{user_id}</code>\n"
-        f"{'📦 Buyurtma' if is_order else '🎮 Item ID'}: {target_id}\n\n"
-        f"Fikringiz bo'lsa yozib qoldiring va <b>Tasdiqlash</b> tugmasini bosing!"
+    await callback.message.answer(
+        "Iltimos o'yin/ilova faylini olishdan avval pastdagi tugmalar orqali to'lov qiling!",
+        reply_markup=InlineKeyboardBuilder()
+        .button(text="💵 Naxt orqali", callback_data=f"pay_cash_order_{user_id}")
+        .button(text="💳 Karta orqali", callback_data=f"pay_card_order_{user_id}")
+        .adjust(1).as_markup()
     )
-    kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Tasdiqlash", callback_data=f"admin_confirm_cash_{user_id}_{target_id}")
-    await bot.send_message(ADMIN_CHANNEL_ID, msg, reply_markup=kb.as_markup(), parse_mode="HTML")
-    await callback.message.answer("✅ Adminga so'rov yuborildi. Tasdiqlanganidan so'ng fayl yuboriladi.")
     await callback.answer()
 
+# ========== O'YIN / ILOVA KO'RSATISH ==========
+@dp.message(F.text.in_(GENRES), F.chat.type == "private")
+async def show_android_games(message: Message, state: FSMContext):
+    print(f"✅ show_android_games → {message.text}")
+    await state.update_data(platform="android", category=message.text)
+    kb = get_items_kb("android", message.text)
+    await message.answer(f"✅ {message.text} janridagi o'yinlar:", reply_markup=kb)
+
+# MUHIM: buyurtma tugmasini ushlamaslik uchun ~F.text.contains qo'shildi
+@dp.message(
+    F.text,
+    F.chat.type == "private",
+    StateFilter(None),
+    ~F.text.contains("Ilova/O'yin buyurtirish")   # ← mana shu qator muhim
+)
+async def show_item_detail(message: Message, state: FSMContext):
+    print("⚠️ show_item_detail ISHLADI")
+    
+    data = await state.get_data()
+    platform = data.get("platform")
+    category = data.get("category")
+    
+    if not platform or not category:
+        return
+
+    conn = sqlite3.connect('games_bot.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, name, description, photo_id, file_id, link FROM items WHERE name=? AND platform=? AND category=?",
+        (message.text, platform, category)
+    )
+    item = cursor.fetchone()
+    conn.close()
+
+    if not item:
+        return
+
+    item_id, name, desc, photo, file_id, link = item
+    short_desc = desc[:900] + "..." if len(desc) > 900 else desc
+
+    kb = InlineKeyboardBuilder()
+    if platform == "android" or (platform == "pc" and category == "apps"):
+        kb.button(text="📥 Yuklab olish", callback_data=f"download_{item_id}")
+    else:
+        kb.button(text="🔗 O'yin linkini olish", callback_data=f"download_{item_id}")
+
+    await message.answer_photo(
+        photo=photo,
+        caption=f"🎮 <b>{escape(name)}</b>\n\n📝 {escape(short_desc)}",
+        reply_markup=kb.as_markup(),
+        parse_mode="HTML"
+    )
 # KARTA
 @dp.callback_query(F.data.startswith("pay_card_"))
 async def pay_card(callback: CallbackQuery):
