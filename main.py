@@ -23,7 +23,7 @@ KARTA_EGASI = "SHERBEK NIZOMIDDINOV"
 logging.basicConfig(level=logging.INFO)
 
 GENRES = [
-    "🚗 Car Games", "🔫 Action Games", "🧟 Horror Games", "⚽ Sports Games",
+    "🚗 Car Games", "🔫 Action Games", "🥊 Fight Games", "🧟 Horror Games", "⚽ Sports Games",
     "🌍 Open World", "📱 Apps", "🌐 Online Games", "🕹PPSSPP Games"
 ]
 
