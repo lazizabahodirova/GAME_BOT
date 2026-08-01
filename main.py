@@ -343,6 +343,78 @@ async def show_item_detail(message: Message, state: FSMContext):
         reply_markup=kb.as_markup(),
         parse_mode="HTML"
     )
+# ========== YUKLAB OLISH TUGMASI ==========
+@dp.callback_query(F.data.startswith("download_"))
+async def download_item(callback: CallbackQuery):
+    item_id = callback.data.split("_")[1]
+    
+    kb = InlineKeyboardBuilder()
+    kb.button(text="💵 Naxt orqali", callback_data=f"pay_cash_{item_id}")
+    kb.button(text="💳 Karta orqali", callback_data=f"pay_card_{item_id}")
+    kb.adjust(1)
+    
+    await callback.message.answer(
+        "To'lov usulini tanlang:",
+        reply_markup=kb.as_markup()
+    )
+    await callback.answer()
+
+
+# ========== NAXT ORQALI ==========
+@dp.callback_query(F.data.startswith("pay_cash_"))
+async def pay_cash(callback: CallbackQuery):
+    parts = callback.data.split("_")
+    item_id = parts[-1]          # oxirgi qism — item_id yoki user_id
+    user = callback.from_user
+    username = user.username or "Username yo'q"
+
+    # Buyurtma (order) holatini ajratamiz
+    is_order = "order" in callback.data
+
+    if is_order:
+        # Buyurtma uchun (fayl admin tomonidan yuboriladi)
+        msg = (
+            f"💵 <b>Naxt to'lov so'rovi (Buyurtma)!</b>\n\n"
+            f"👤 @{escape(username)}\n"
+            f"🆔 ID: <code>{user.id}</code>\n"
+            f"📦 Buyurtma ID: {item_id}"
+        )
+        kb = InlineKeyboardBuilder()
+        kb.button(
+            text="✅ Tasdiqlash",
+            callback_data=f"admin_confirm_cash_{user.id}_{item_id}"
+        )
+        await bot.send_message(ADMIN_CHANNEL_ID, msg, reply_markup=kb.as_markup(), parse_mode="HTML")
+        await callback.message.answer("✅ Adminga so'rov yuborildi. Tasdiqlangandan so'ng fayl yuboriladi.")
+    else:
+        # Oddiy o'yin/ilova
+        conn = sqlite3.connect('games_bot.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM items WHERE id=?", (item_id,))
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            await callback.answer("O'yin topilmadi!", show_alert=True)
+            return
+
+        name = row[0]
+        msg = (
+            f"💵 <b>Naxt to'lov so'rovi!</b>\n\n"
+            f"👤 @{escape(username)}\n"
+            f"🆔 ID: <code>{user.id}</code>\n"
+            f"🎮 O'yin/Ilova: <b>{escape(name)}</b>\n"
+            f"🆔 Item ID: <code>{item_id}</code>"
+        )
+        kb = InlineKeyboardBuilder()
+        kb.button(
+            text="✅ Tasdiqlash",
+            callback_data=f"admin_confirm_cash_{user.id}_{item_id}"
+        )
+        await bot.send_message(ADMIN_CHANNEL_ID, msg, reply_markup=kb.as_markup(), parse_mode="HTML")
+        await callback.message.answer("✅ Adminga so'rov yuborildi. Tasdiqlangandan so'ng o'yin yuboriladi.")
+
+    await callback.answer()
 # KARTA
 @dp.callback_query(F.data.startswith("pay_card_"))
 async def pay_card(callback: CallbackQuery):
