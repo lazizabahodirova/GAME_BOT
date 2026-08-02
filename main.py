@@ -246,24 +246,19 @@ async def add_desc(message: Message, state: FSMContext):
 
 @dp.message(AddItem.waiting_for_photo, F.photo)
 async def add_photo(message: Message, state: FSMContext):
-    await state.update_data(photo=message.photo[-1].file_id, files=[])  # bo'sh ro'yxat
+    await state.update_data(photo=message.photo[-1].file_id, files=[])
     data = await state.get_data()
-    
-    if data.get("platform") == "pc" and data.get("category") == "games":
-        await message.answer(
-            "O'yin linkini yuboring yoki fayllarni yuboring.\n"
-            "Bir nechta fayl yuborishingiz mumkin.\n"
-            "Tayyor bo'lgach <b>✅ Tayyor</b> deb yozing.",
-            parse_mode="HTML"
-        )
-    else:
-        await message.answer(
-            "Fayllarni yuboring (APK, OBB va boshqalar).\n"
-            "Nechta bo'lsa ham yuborishingiz mumkin.\n"
-            "Barcha fayllarni yuborib bo'lgach <b>✅ Tayyor</b> deb yozing.",
-            parse_mode="HTML"
-        )
+
+    await message.answer(
+        "📦 Endi <b>fayl</b> yoki <b>link</b> yuboring.\n\n"
+        "• Bir nechta fayl yuborishingiz mumkin (APK, OBB va h.k.)\n"
+        "• Yoki katta faylni cloud’ga joylab <b>link</b>ini yuboring\n\n"
+        "Barcha fayllarni yuborib bo‘lgach yoki link yuborgach\n"
+        "<b>✅ Tayyor</b> deb yozing.",
+        parse_mode="HTML"
+    )
     await state.set_state(AddItem.waiting_for_file_or_link)
+
 
 @dp.message(AddItem.waiting_for_file_or_link, F.document)
 async def add_file_collect(message: Message, state: FSMContext):
@@ -271,31 +266,29 @@ async def add_file_collect(message: Message, state: FSMContext):
     files = data.get("files", [])
     files.append(message.document.file_id)
     await state.update_data(files=files)
-    
+
     await message.answer(
         f"✅ Fayl qabul qilindi! (jami: {len(files)} ta)\n"
-        f"Yana yuborishingiz mumkin yoki <b>✅ Tayyor</b> deb yozing.",
+        f"Yana fayl yuborishingiz yoki <b>✅ Tayyor</b> deb yozishingiz mumkin.",
         parse_mode="HTML"
     )
 
 
 @dp.message(AddItem.waiting_for_file_or_link, F.text)
 async def add_file_finish(message: Message, state: FSMContext):
-    text = message.text.strip().lower()
-    
-    # Agar "tayyor" deb yozmasa va link bo'lsa (PC o'yinlari uchun)
+    text = message.text.strip()
     data = await state.get_data()
     files = data.get("files", [])
-    
-    if text in ["✅ tayyor", "tayyor", "✅"]:
-        if not files and data.get("platform") == "android":
-            await message.answer("Kamida bitta fayl yuboring!")
+
+    # 1. "Tayyor" bosilganda
+    if text.lower() in ["✅ tayyor", "tayyor", "✅"]:
+        if not files and not data.get("link"):
+            await message.answer("Kamida bitta fayl yoki link yuboring!")
             return
-        
-        # Saqlash
+
         file_ids_json = json.dumps(files) if files else None
-        link = None
-        
+        link = data.get("link")
+
         conn = sqlite3.connect('games_bot.db')
         cursor = conn.cursor()
         cursor.execute(
@@ -304,38 +297,23 @@ async def add_file_finish(message: Message, state: FSMContext):
         )
         conn.commit()
         conn.close()
-        
+
         await message.answer(
-            f"✅ <b>{escape(data['name'])}</b> muvaffaqiyatli qo'shildi!\n"
-            f"📦 Fayllar soni: {len(files)} ta",
+            f"✅ <b>{escape(data['name'])}</b> muvaffaqiyatli qo‘shildi!\n"
+            f"📦 Fayllar: {len(files)} ta" + (f"\n🔗 Link: bor" if link else ""),
             reply_markup=main_menu_kb(),
             parse_mode="HTML"
         )
         await state.clear()
         return
-    
-    # Agar matn kelgan bo'lsa — bu link deb hisoblaymiz (PC o'yinlari uchun)
-    if data.get("platform") == "pc" and data.get("category") == "games":
-        link = message.text
-        file_ids_json = json.dumps(files) if files else None
-        
-        conn = sqlite3.connect('games_bot.db')
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO items (platform, category, name, description, photo_id, file_id, link) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (data['platform'], data['category'], data['name'], data['desc'], data['photo'], file_ids_json, link)
-        )
-        conn.commit()
-        conn.close()
-        
-        await message.answer(
-            f"✅ <b>{escape(data['name'])}</b> muvaffaqiyatli qo'shildi!",
-            reply_markup=main_menu_kb(),
-            parse_mode="HTML"
-        )
-        await state.clear()
-    else:
-        await message.answer("Fayl yuboring yoki <b>✅ Tayyor</b> deb yozing.", parse_mode="HTML")
+
+    # 2. Oddiy matn kelgan bo‘lsa — bu link deb qabul qilamiz
+    await state.update_data(link=text)
+    await message.answer(
+        f"✅ Link qabul qilindi!\n"
+        f"Yana fayl yuborishingiz mumkin yoki <b>✅ Tayyor</b> deb yozing.",
+        parse_mode="HTML"
+    )
 
 # ========== /del (ADMIN) — o'chirish ==========
 @dp.message(Command("del"), F.from_user.id == ADMIN_ID)
